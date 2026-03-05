@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket Test Client</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+    }
+    #messages {
+      border: 1px solid #ccc;
+      padding: 10px;
+      height: 400px;
+      overflow-y: auto;
+      margin-bottom: 20px;
+      background: #f9f9f9;
+    }
+    .message {
+      margin: 5px 0;
+      padding: 5px;
+      background: white;
+      border-left: 3px solid #007bff;
+    }
+    .system {
+      border-left-color: #28a745;
+      font-style: italic;
+      color: #666;
+    }
+    .error {
+      border-left-color: #dc3545;
+      color: #dc3545;
+    }
+    #controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    input, button, select {
+      padding: 10px;
+      font-size: 14px;
+    }
+    input[type="text"] {
+      flex: 1;
+    }
+    button {
+      background: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    #status {
+      padding: 10px;
+      margin-bottom: 10px;
+      border-radius: 4px;
+    }
+    .connected {
+      background: #d4edda;
+      color: #155724;
+    }
+    .disconnected {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebSocket Test Client</h1>
+  
+  <div id="status" class="disconnected">Disconnected</div>
+  
+  <div id="controls">
+    <input type="text" id="wsUrl" value="ws://localhost:3000/ws" placeholder="WebSocket URL">
+    <button onclick="connect()">Connect</button>
+    <button onclick="disconnect()">Disconnect</button>
+  </div>
+  
+  <div id="controls">
+    <select id="channelType">
+      <option value="public">Public Channel</option>
+      <option value="private">Private Channel</option>
+      <option value="presence">Presence Channel</option>
+    </select>
+    <input type="text" id="channelName" placeholder="Channel name (e.g., public-chat)" value="public-chat">
+    <button onclick="subscribe()">Subscribe</button>
+    <button onclick="unsubscribe()">Unsubscribe</button>
+  </div>
+  
+  <div id="controls">
+    <input type="text" id="messageInput" placeholder="Type a message...">
+    <button onclick="sendMessage()">Send Message</button>
+  </div>
+  
+  <div id="messages"></div>
+
+  <script>
+    let ws = null;
+    let socketId = null;
+    const messagesDiv = document.getElementById('messages');
+    const statusDiv = document.getElementById('status');
+    const messageInput = document.getElementById('messageInput');
+    const wsUrlInput = document.getElementById('wsUrl');
+    const channelNameInput = document.getElementById('channelName');
+    const channelTypeSelect = document.getElementById('channelType');
+
+    function addMessage(text, className = '') {
+      const div = document.createElement('div');
+      div.className = `message ${className}`;
+      div.textContent = new Date().toLocaleTimeString() + ' - ' + text;
+      messagesDiv.appendChild(div);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    function updateStatus(connected) {
+      if (connected) {
+        statusDiv.textContent = 'Connected';
+        statusDiv.className = 'connected';
+      } else {
+        statusDiv.textContent = 'Disconnected';
+        statusDiv.className = 'disconnected';
+      }
+    }
+
+    async function connect() {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        addMessage('Already connected', 'error');
+        return;
+      }
+
+      const url = wsUrlInput.value;
+      ws = new WebSocket(url);
+
+      ws.onopen = () => {
+        addMessage('Connected to WebSocket server', 'system');
+        updateStatus(true);
+        // Generate a mock socket ID (in real app, server would provide this)
+        socketId = Date.now() + '.' + Math.random().toString(36).substring(2, 15);
+        addMessage('Socket ID: ' + socketId, 'system');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          console.log('Received:', message);
+          
+          if (message.event === 'pusher_internal:subscription_succeeded') {
+            addMessage(`✓ Subscribed to ${message.channel}`, 'system');
+            if (message.data.presence) {
+              addMessage(`Presence: ${message.data.presence.count} members`, 'system');
+            }
+          } else if (message.event === 'pusher_internal:member_added') {
+            addMessage(`👤 User joined: ${message.data.user_id}`, 'system');
+          } else if (message.event === 'pusher_internal:member_removed') {
+            addMessage(`👋 User left: ${message.data.user_id}`, 'system');
+          } else if (message.event === 'pusher:pong') {
+            addMessage('Pong received', 'system');
+          } else if (message.event === 'pusher:error') {
+            addMessage(`Error: ${message.data.message}`, 'error');
+          } else {
+            addMessage(`Event: ${message.event} - ${JSON.stringify(message.data)}`);
+          }
+        } catch (error) {
+          addMessage('Invalid JSON: ' + event.data, 'error');
+        }
+      };
+
+      ws.onerror = (error) => {
+        addMessage('WebSocket error: ' + error, 'error');
+      };
+
+      ws.onclose = () => {
+        addMessage('Disconnected from server', 'system');
+        updateStatus(false);
+        ws = null;
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+    }
+
+    async function subscribe() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addMessage('Not connected. Please connect first.', 'error');
+        return;
+      }
+
+      const channelName = channelNameInput.value;
+      const channelType = channelTypeSelect.value;
+
+      if (!channelName) {
+        addMessage('Please enter a channel name', 'error');
+        return;
+      }
+
+      // Validate channel name format
+      const prefix = channelType === 'public' ? 'public-' : 
+                     channelType === 'private' ? 'private-' : 'presence-';
+      
+      if (!channelName.startsWith(prefix)) {
+        addMessage(`Channel name should start with "${prefix}"`, 'error');
+        return;
+      }
+
+      try {
+        if (channelType === 'private' || channelType === 'presence') {
+          // Get auth token
+          const authUrl = wsUrlInput.value.replace('ws://', 'http://').replace('wss://', 'https://').replace('/ws', '');
+          
+          const channelData = channelType === 'presence' ? 
+            JSON.stringify({ user_id: 'user-' + Date.now(), user_info: { name: 'Test User' } }) : 
+            undefined;
+
+          const authResponse = await fetch(authUrl + '/auth', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              socket_id: socketId,
+              channel_name: channelName,
+              channel_data: channelData,
+            }),
+          });
+
+          if (!authResponse.ok) {
+            const error = await authResponse.json();
+            addMessage(`Auth failed: ${JSON.stringify(error)}`, 'error');
+            return;
+          }
+
+          const auth = await authResponse.json();
+          
+          ws.send(JSON.stringify({
+            event: 'pusher:subscribe',
+            data: {
+              channel: channelName,
+              auth: auth.auth,
+              channel_data: channelData,
+            },
+          }));
+        } else {
+          // Public channel - no auth needed
+          ws.send(JSON.stringify({
+            event: 'pusher:subscribe',
+            data: { channel: channelName },
+          }));
+        }
+      } catch (error) {
+        addMessage('Subscribe error: ' + error.message, 'error');
+      }
+    }
+
+    function unsubscribe() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addMessage('Not connected', 'error');
+        return;
+      }
+
+      const channelName = channelNameInput.value;
+      if (!channelName) {
+        addMessage('Please enter a channel name', 'error');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        event: 'pusher:unsubscribe',
+        data: { channel: channelName },
+      }));
+    }
+
+    function sendMessage() {
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        addMessage('Not connected', 'error');
+        return;
+      }
+
+      const text = messageInput.value;
+      const channelName = channelNameInput.value;
+
+      if (!text) {
+        addMessage('Please enter a message', 'error');
+        return;
+      }
+
+      if (!channelName) {
+        addMessage('Please enter a channel name', 'error');
+        return;
+      }
+
+      ws.send(JSON.stringify({
+        event: 'new-message',
+        data: { text, timestamp: Date.now() },
+        channel: channelName,
+      }));
+
+      messageInput.value = '';
+    }
+
+    messageInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+
+    // Auto-connect on load (optional)
+    // connect();
+  </script>
+</body>
+</html>
